@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
+import Logo from './Logo'
 
 const navItems = [
   { to: '/', icon: Home, label: 'Tổng quan' },
@@ -32,11 +33,8 @@ export default function Layout({ children }) {
     <div className="min-h-screen flex bg-slate-50 dark:bg-slate-900">
       {/* Sidebar Desktop */}
       <aside className="hidden lg:flex w-60 flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700">
-        <div className="p-5 flex items-center gap-2 border-b border-slate-200 dark:border-slate-700">
-          <div className="w-9 h-9 bg-brand-500 rounded-lg flex items-center justify-center">
-            <Wallet className="w-5 h-5 text-white" />
-          </div>
-          <span className="font-semibold text-lg text-slate-900 dark:text-white">FinFlow</span>
+        <div className="p-5 border-b border-slate-200 dark:border-slate-700">
+          <Logo size={36} variant="horizontal" />
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {navItems.map(item => (
@@ -64,12 +62,7 @@ export default function Layout({ children }) {
           <div className="fixed inset-0 bg-slate-900/50" onClick={() => setMobileOpen(false)} />
           <aside className="relative w-64 bg-white dark:bg-slate-800 flex flex-col">
             <div className="p-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 bg-brand-500 rounded-lg flex items-center justify-center">
-                  <Wallet className="w-5 h-5 text-white" />
-                </div>
-                <span className="font-semibold text-lg text-slate-900 dark:text-white">FinFlow</span>
-              </div>
+              <Logo size={32} variant="horizontal" />
               <button onClick={() => setMobileOpen(false)} className="p-1">
                 <X className="w-5 h-5 text-slate-500" />
               </button>

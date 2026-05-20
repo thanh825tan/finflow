@@ -1,218 +1,388 @@
-import { useState } from 'react'
-import { TrendingUp, ShoppingBag, PiggyBank, CreditCard, ChevronLeft, ChevronRight } from 'lucide-react'
-import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts'
-import { useDashboard } from '../hooks/useDashboard'
-import { formatCurrency, monthLabel, percentChange } from '../lib/format'
-import { useTheme } from '../context/ThemeContext'
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
+import { formatCurrency, formatDate, getMonthRange, monthLabel, percentChange } from '../lib/format';
+import { getCategoryEmoji } from '../lib/categoryIcons';
+import { useDashboard } from '../hooks/useDashboard';
+import TransactionModal from '../components/TransactionModal';
+import {
+  Wallet, ShoppingBag, PiggyBank, CreditCard,
+  ChevronLeft, ChevronRight, ChevronRight as ArrowRight,
+  TrendingUp, TrendingDown,
+} from 'lucide-react';
+import {
+  PieChart, Pie, Cell, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
+} from 'recharts';
 
 export default function Overview() {
-  const now = new Date()
-  const [year, setYear] = useState(now.getFullYear())
-  const [month, setMonth] = useState(now.getMonth() + 1)
-  const { theme } = useTheme()
+  const { user } = useAuth();
+  const navigate = useNavigate();
 
-  const d = useDashboard(year, month)
+  const now = new Date();
+  const [currentYear, setCurrentYear] = useState(now.getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(now.getMonth() + 1);
 
-  const prevMonth = () => {
-    if (month === 1) { setYear(y => y - 1); setMonth(12) }
-    else setMonth(m => m - 1)
-  }
-  const nextMonth = () => {
-    if (month === 12) { setYear(y => y + 1); setMonth(1) }
-    else setMonth(m => m + 1)
-  }
+  // Hook trả về FLAT structure: { income, expense, savings, balance, prevIncome, prevExpense, prevSavings, byCategory, byDay, recent, loading, refetch }
+  const {
+    income = 0,
+    expense = 0,
+    savings = 0,
+    balance = 0,
+    prevIncome = 0,
+    prevExpense = 0,
+    prevSavings = 0,
+    byCategory = [],
+    byDay = [],
+    recent = [],
+    loading,
+    refetch,
+  } = useDashboard(currentYear, currentMonth);
 
-  const stats = [
+  // State riêng cho budget + categories + accounts (hook không cover)
+  const [categories, setCategories] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [budgetData, setBudgetData] = useState([]);
+
+  // Modal state
+  const [editingTx, setEditingTx] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const gotoPrevMonth = () => {
+    if (currentMonth === 1) {
+      setCurrentMonth(12);
+      setCurrentYear(currentYear - 1);
+    } else {
+      setCurrentMonth(currentMonth - 1);
+    }
+  };
+
+  const gotoNextMonth = () => {
+    if (currentMonth === 12) {
+      setCurrentMonth(1);
+      setCurrentYear(currentYear + 1);
+    } else {
+      setCurrentMonth(currentMonth + 1);
+    }
+  };
+
+  const loadExtras = async () => {
+    if (!user) return;
+    const { start, end } = getMonthRange(currentYear, currentMonth);
+
+    // Categories + accounts cho modal
+    const { data: cats } = await supabase.from('categories').select('*').eq('user_id', user.id);
+    setCategories(cats || []);
+    const { data: accs } = await supabase.from('accounts').select('*').eq('user_id', user.id);
+    setAccounts(accs || []);
+
+    // Budget
+    const { data: budgets } = await supabase
+      .from('budgets')
+      .select('*, categories(*)')
+      .eq('user_id', user.id)
+      .eq('month', currentMonth)
+      .eq('year', currentYear);
+
+    const budgetWithSpent = await Promise.all(
+      (budgets || []).map(async (b) => {
+        const { data: spent } = await supabase
+          .from('transactions')
+          .select('amount')
+          .eq('user_id', user.id)
+          .eq('category_id', b.category_id)
+          .eq('type', 'expense')
+          .gte('date', start)
+          .lte('date', end);
+        const total = (spent || []).reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+        return { ...b, spent: total };
+      })
+    );
+    budgetWithSpent.sort((a, b) => (b.spent / Math.max(b.amount, 1)) - (a.spent / Math.max(a.amount, 1)));
+    setBudgetData(budgetWithSpent.slice(0, 5));
+  };
+
+  useEffect(() => {
+    loadExtras();
+  }, [user, currentYear, currentMonth]);
+
+  const handleRowClick = (tx) => {
+    setEditingTx(tx);
+    setModalOpen(true);
+  };
+
+  const handleSaved = () => {
+    refetch();      // refresh data từ hook
+    loadExtras();   // refresh budget
+  };
+
+  const statCards = [
     {
       label: 'Tổng thu nhập',
-      value: d.income,
-      diff: percentChange(d.income, d.prevIncome),
-      icon: TrendingUp,
-      iconBg: 'bg-emerald-100 dark:bg-emerald-900/40',
-      iconColor: 'text-emerald-700 dark:text-emerald-400',
-      valueColor: 'text-emerald-700 dark:text-emerald-400',
+      value: income,
+      prev: prevIncome,
+      icon: Wallet,
+      bg: 'bg-emerald-100 dark:bg-emerald-900/30',
+      text: 'text-emerald-600 dark:text-emerald-400',
     },
     {
       label: 'Tổng chi tiêu',
-      value: d.expense,
-      diff: percentChange(d.expense, d.prevExpense),
+      value: expense,
+      prev: prevExpense,
       icon: ShoppingBag,
-      iconBg: 'bg-rose-100 dark:bg-rose-900/40',
-      iconColor: 'text-rose-700 dark:text-rose-400',
-      valueColor: 'text-rose-700 dark:text-rose-400',
+      bg: 'bg-rose-100 dark:bg-rose-900/30',
+      text: 'text-rose-600 dark:text-rose-400',
     },
     {
       label: 'Tiết kiệm',
-      value: d.savings,
-      diff: percentChange(d.savings, d.prevSavings),
+      value: savings,
+      prev: prevSavings,
       icon: PiggyBank,
-      iconBg: 'bg-sky-100 dark:bg-sky-900/40',
-      iconColor: 'text-sky-700 dark:text-sky-400',
-      valueColor: 'text-sky-700 dark:text-sky-400',
+      bg: 'bg-sky-100 dark:bg-sky-900/30',
+      text: 'text-sky-600 dark:text-sky-400',
     },
     {
       label: 'Số dư hiện tại',
-      value: d.balance,
-      sub: 'Tổng tài sản',
+      value: balance,
+      prev: null,
       icon: CreditCard,
-      iconBg: 'bg-violet-100 dark:bg-violet-900/40',
-      iconColor: 'text-violet-700 dark:text-violet-400',
-      valueColor: 'text-violet-700 dark:text-violet-400',
+      bg: 'bg-violet-100 dark:bg-violet-900/30',
+      text: 'text-violet-600 dark:text-violet-400',
+      subtitle: 'Tổng tài sản - Tổng nợ',
     },
-  ]
+  ];
 
-  const isDark = theme === 'dark'
-  const gridColor = isDark ? '#334155' : '#E2E8F0'
-  const textColor = isDark ? '#94A3B8' : '#64748B'
+  const PIE_COLORS = ['#3B82F6', '#F43F5E', '#F59E0B', '#8B5CF6', '#10B981', '#64748B', '#EC4899'];
+
+  // Slice top 5 cho recent từ hook (hook đã trả 5 nhưng cho chắc)
+  const recentTxs = (recent || []).slice(0, 5);
 
   return (
-    <div className="space-y-4">
-      {/* Month picker */}
-      <div className="flex justify-end">
-        <div className="inline-flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1">
-          <button onClick={prevMonth} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
-            <ChevronLeft className="w-4 h-4 text-slate-500" />
+    <div className="space-y-4 md:space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h2 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white">Tổng quan</h2>
+        <div className="flex items-center gap-2 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 border border-slate-200 dark:border-slate-700">
+          <button onClick={gotoPrevMonth} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
+            <ChevronLeft size={16} />
           </button>
-          <span className="px-3 text-sm font-medium text-slate-900 dark:text-white min-w-[110px] text-center">
-            {monthLabel(year, month)}
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300 min-w-[110px] text-center">
+            {monthLabel(currentYear, currentMonth)}
           </span>
-          <button onClick={nextMonth} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
-            <ChevronRight className="w-4 h-4 text-slate-500" />
+          <button onClick={gotoNextMonth} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
+            <ChevronRight size={16} />
           </button>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {stats.map((s, i) => (
-          <div key={i} className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-500 dark:text-slate-400">{s.label}</span>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${s.iconBg}`}>
-                <s.icon className={`w-4 h-4 ${s.iconColor}`} />
+      {/* 4 stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+        {statCards.map((card) => {
+          const Icon = card.icon;
+          const change = card.prev !== null && card.prev !== 0 ? percentChange(card.value, card.prev) : null;
+          return (
+            <div key={card.label} className="bg-white dark:bg-slate-800 rounded-2xl p-4 md:p-5 border border-slate-100 dark:border-slate-700">
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs md:text-sm text-slate-500 dark:text-slate-400">{card.label}</div>
+                  <div className={`text-lg md:text-2xl font-bold mt-1 ${card.text}`}>
+                    {formatCurrency(card.value)}
+                  </div>
+                  {change !== null && isFinite(change) && (
+                    <div className={`text-xs mt-1 flex items-center gap-1 ${change >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {change >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                      {Math.abs(change).toFixed(1)}% so với tháng trước
+                    </div>
+                  )}
+                  {card.subtitle && (
+                    <div className="text-xs text-slate-400 mt-1">{card.subtitle}</div>
+                  )}
+                </div>
+                <div className={`${card.bg} ${card.text} p-2 rounded-lg`}>
+                  <Icon size={20} />
+                </div>
               </div>
             </div>
-            <div className={`text-lg lg:text-xl font-semibold ${s.valueColor}`}>
-              {formatCurrency(s.value)}
-            </div>
-            {s.diff !== undefined && (
-              <div className={`text-xs mt-1 ${s.diff >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                {s.diff >= 0 ? '↑' : '↓'} {Math.abs(s.diff).toFixed(1)}% so với tháng trước
-              </div>
-            )}
-            {s.sub && <div className="text-xs mt-1 text-slate-500 dark:text-slate-400">{s.sub}</div>}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {/* Donut */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Chi tiêu theo danh mục</h3>
-          {d.byCategory.length === 0 ? (
-            <div className="h-60 flex items-center justify-center text-sm text-slate-400">
-              Chưa có giao dịch trong tháng này
-            </div>
+      {/* Donut + Line charts */}
+      <div className="grid lg:grid-cols-2 gap-4 md:gap-6">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 md:p-5 border border-slate-100 dark:border-slate-700">
+          <h3 className="font-semibold text-slate-900 dark:text-white mb-4">Chi tiêu theo danh mục</h3>
+          {byCategory.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-slate-400">Chưa có dữ liệu</div>
           ) : (
-            <div className="flex items-center gap-4">
-              <div className="w-40 h-40 relative">
-                <ResponsiveContainer width="100%" height="100%">
+            <div className="flex flex-col md:flex-row items-center gap-4">
+              <div className="w-44 h-44 relative">
+                <ResponsiveContainer>
                   <PieChart>
-                    <Pie data={d.byCategory} dataKey="value" innerRadius={45} outerRadius={70} paddingAngle={2}>
-                      {d.byCategory.map((c, i) => <Cell key={i} fill={c.color} />)}
+                    <Pie data={byCategory} dataKey="value" innerRadius={50} outerRadius={75} paddingAngle={2}>
+                      {byCategory.map((c, i) => (
+                        <Cell key={i} fill={c.color || PIE_COLORS[i % PIE_COLORS.length]} />
+                      ))}
                     </Pie>
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400">Tổng chi</div>
-                  <div className="text-xs font-semibold text-slate-900 dark:text-white">
-                    {formatCurrency(d.expense, { compact: true })}
-                  </div>
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+                  <div className="text-xs text-slate-500">Tổng chi tiêu</div>
+                  <div className="text-sm font-bold text-slate-900 dark:text-white">{formatCurrency(expense)}</div>
                 </div>
               </div>
-              <div className="flex-1 space-y-1.5">
-                {d.byCategory.slice(0, 6).map((c, i) => {
-                  const pct = d.expense > 0 ? (c.value / d.expense * 100) : 0
-                  return (
-                    <div key={i} className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: c.color }} />
-                        <span className="truncate text-slate-700 dark:text-slate-200">{c.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className="text-slate-900 dark:text-white font-medium">{formatCurrency(c.value, { compact: true })}</span>
-                        <span className="text-slate-400 w-10 text-right">{pct.toFixed(1)}%</span>
-                      </div>
+              <div className="flex-1 space-y-1.5 w-full">
+                {byCategory.slice(0, 6).map((c, i) => (
+                  <div key={c.name} className="flex items-center text-sm gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color || PIE_COLORS[i % PIE_COLORS.length] }} />
+                    <div className="flex-1 truncate text-slate-700 dark:text-slate-300">{c.name}</div>
+                    <div className="text-slate-500 dark:text-slate-400 text-xs">
+                      {expense > 0 ? ((c.value / expense) * 100).toFixed(1) : 0}%
                     </div>
-                  )
-                })}
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
 
-        {/* Line */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Chi tiêu theo ngày</h3>
+        <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 md:p-5 border border-slate-100 dark:border-slate-700">
+          <h3 className="font-semibold text-slate-900 dark:text-white mb-4">Chi tiêu theo ngày</h3>
           <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={d.byDay} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid stroke={gridColor} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: textColor }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: textColor }} axisLine={false} tickLine={false}
-                  tickFormatter={v => v >= 1000 ? `${v / 1000}K` : v} />
-                <Tooltip
-                  contentStyle={{
-                    background: isDark ? '#1E293B' : 'white',
-                    border: `1px solid ${gridColor}`,
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
-                  formatter={(v) => formatCurrency(v)}
-                  labelFormatter={(d) => `Ngày ${d}`}
-                />
-                <Line type="monotone" dataKey="expense" stroke="#F43F5E" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 4 }} name="Chi tiêu" />
-                <Line type="monotone" dataKey="income" stroke="#10B981" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 4 }} name="Thu nhập" />
+            <ResponsiveContainer>
+              <LineChart data={byDay}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.3} />
+                <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="#94a3b8" interval={Math.max(0, Math.floor(byDay.length / 6) - 1)} />
+                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} />
+                <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+                <Line type="monotone" dataKey="expense" stroke="#F43F5E" strokeWidth={2} dot={{ r: 3 }} name="Chi tiêu" />
               </LineChart>
             </ResponsiveContainer>
           </div>
         </div>
       </div>
 
-      {/* Recent transactions */}
-      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Giao dịch gần đây</h3>
-        {d.recent.length === 0 ? (
-          <div className="text-sm text-slate-400 text-center py-6">Chưa có giao dịch</div>
-        ) : (
-          <div className="space-y-1">
-            {d.recent.map(t => (
-              <div key={t.id} className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700 last:border-0">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: (t.categories?.color || '#94A3B8') + '20' }}>
-                    <div className="w-2 h-2 rounded-full" style={{ background: t.categories?.color || '#94A3B8' }} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-slate-900 dark:text-white truncate">
-                      {t.description || t.note || 'Giao dịch'}
-                    </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {t.categories?.name || 'Chưa phân loại'} · {new Date(t.date).toLocaleDateString('vi-VN')}
-                    </div>
-                  </div>
-                </div>
-                <div className={`text-sm font-semibold flex-shrink-0 ${
-                  t.type === 'income' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-                }`}>
-                  {t.type === 'income' ? '+' : '−'}{formatCurrency(t.amount)}
-                </div>
-              </div>
-            ))}
+      {/* Recent tx + Budget */}
+      <div className="grid lg:grid-cols-2 gap-4 md:gap-6">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 md:p-5 border border-slate-100 dark:border-slate-700">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-slate-900 dark:text-white">Giao dịch gần đây</h3>
           </div>
-        )}
+          {recentTxs.length === 0 ? (
+            <div className="py-8 text-center text-slate-400 text-sm">Chưa có giao dịch nào</div>
+          ) : (
+            <div className="space-y-2">
+              {recentTxs.map((tx) => {
+                const emoji = getCategoryEmoji(tx.categories);
+                const color = tx.categories?.color || '#64748B';
+                return (
+                  <button
+                    key={tx.id}
+                    onClick={() => handleRowClick(tx)}
+                    className="w-full flex items-center gap-3 p-2 -mx-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/50 transition text-left"
+                  >
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-lg flex-shrink-0"
+                      style={{ backgroundColor: `${color}20` }}
+                    >
+                      {emoji}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                        {tx.note || tx.categories?.name || 'Giao dịch'}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {tx.categories?.name} · {formatDate(tx.date)}
+                      </div>
+                    </div>
+                    <div className={`text-sm font-semibold flex-shrink-0 ${tx.type === 'income' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <button
+            onClick={() => navigate('/transactions')}
+            className="mt-4 w-full flex items-center justify-center gap-1 text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 font-medium py-2"
+          >
+            Xem tất cả giao dịch <ArrowRight size={14} />
+          </button>
+        </div>
+
+        <div className="bg-white dark:bg-slate-800 rounded-2xl p-4 md:p-5 border border-slate-100 dark:border-slate-700">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-slate-900 dark:text-white">Ngân sách</h3>
+            <button
+              onClick={() => navigate('/budgets')}
+              className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 font-medium"
+            >
+              Xem tất cả
+            </button>
+          </div>
+          {budgetData.length === 0 ? (
+            <div className="py-8 text-center text-slate-400 text-sm">
+              Chưa có ngân sách nào cho tháng này
+              <button
+                onClick={() => navigate('/budgets')}
+                className="block mx-auto mt-2 text-indigo-600 dark:text-indigo-400 font-medium"
+              >
+                + Thiết lập ngân sách
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {budgetData.map((b) => {
+                const pct = b.amount > 0 ? Math.min((b.spent / b.amount) * 100, 100) : 0;
+                const isOver = b.spent > b.amount;
+                const isWarn = pct >= 80 && !isOver;
+                const emoji = getCategoryEmoji(b.categories);
+                const color = b.categories?.color || '#64748B';
+                const barColor = isOver ? '#F43F5E' : isWarn ? '#F59E0B' : color;
+                return (
+                  <div key={b.id}>
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-base flex-shrink-0"
+                           style={{ backgroundColor: `${color}20` }}>
+                        {emoji}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                            {b.categories?.name}
+                          </span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400 flex-shrink-0">
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          {formatCurrency(b.spent)} / {formatCurrency(b.amount)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${pct}%`, backgroundColor: barColor }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
+
+      <TransactionModal
+        open={modalOpen}
+        onClose={() => { setModalOpen(false); setEditingTx(null); }}
+        transaction={editingTx}
+        categories={categories}
+        accounts={accounts}
+        onSaved={handleSaved}
+      />
     </div>
-  )
+  );
 }
